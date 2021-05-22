@@ -28,6 +28,7 @@ proc ::signalr::init-tls {} {
     }
     
     method invoke {method argsData} {
+        set invocationId [$connection invocationId [self]]
         set message [json template {
             {
                 "H": "~S:hub",
@@ -35,10 +36,32 @@ proc ::signalr::init-tls {} {
                 "A": "~T:args",
                 "I": "~N:invocation"
             }
-        } [list hub $name method $method args $argsData invocation [$connection invocationId]]]
+        } [list hub $name method $method args $argsData \
+                invocation $invocationId]]
         $connection send $message
+        return $invocationId
     }
-    
+
+    method result {invocationId result} {
+        puts "Result of invocation $invocationId : $result"
+    }
+
+    method progress {invocationId data} {
+        puts "Progress of invocation $invocationId : $data"
+    }
+
+    method error {invocationId message data} {
+        set m "Error occured on invocation $invocationId"
+        append m ": $message (additional data: $data)"
+        puts $m
+    }
+
+    method huberror {invocationId message data} {
+        set m "Hub-Error occured on invocation $invocationId"
+        append m ": $message (additional data: $data)"
+        puts $m
+    }
+
 }
 
 ::ooh::class create ::signalr::client {
@@ -52,6 +75,7 @@ proc ::signalr::init-tls {} {
     property Connected no -get
     property Started no -get
     property InvocationId 0
+    property Invocations {}
     
     construct {args} {
         set Url [dict get $args -url]
@@ -70,7 +94,7 @@ proc ::signalr::init-tls {} {
     }
     
     method addHub {hub} {
-        set name [$hub cget -name]
+        set name [string tol [$hub cget -name]]
         if {![dict exists $Hubs $name]} {
             if {$Socket != {}} {
                 throw SIGNALR "Cannot create new hub, Connection [self] is already started"
@@ -90,8 +114,10 @@ proc ::signalr::init-tls {} {
         }
     }
     
-    method invocationId {} {
-        incr InvocationId
+    method invocationId {hub} {
+        set iid [incr InvocationId]
+        dict set Invocations $iid $hub
+        return $iid
     }
 
     method start {} {
@@ -182,7 +208,7 @@ proc ::signalr::init-tls {} {
 
         if {[dict exists $msg I]} {
             # invocation received from server
-            # TODO
+            my ProcessInvocationResult $msg
             return
         }
 
@@ -204,6 +230,30 @@ proc ::signalr::init-tls {} {
         if {[dict get $crtlResult reconnect]} {
             my stop
             my start
+        }
+    }
+
+    method ProcessInvocationResult {msg} {
+        set invocId [dict get $msg I]
+        if {![dict exists $Invocations $invocId]} {
+            return
+        }
+
+        set hub [dict get $Invocations $invocId]
+        dict unset Invocations $invocId
+        if {[dict exists $msg E]} {
+            # error message
+            if {[dict exists $msg H] && [dict get $msg H]} {
+                $hub huberror $invocId [dict get $msg E] \
+                    [expr {[dict exists $msg D] ? [dict get $msg D] : {}}]
+            } else {
+                $hub error $invocId [dict get $msg E] \
+                    [expr {[dict exists $msg D] ? [dict get $msg D] : {}}]
+            }
+        } else {
+            # result message
+            $hub result $invocId \
+                [expr {[dict exists $msg R] ? [dict get $msg R] : {}}]
         }
     }
 
@@ -232,7 +282,15 @@ proc ::signalr::init-tls {} {
     }
 
     method ProcessHubMethod {methodCall} {
-        if {[dict exists $methodCall H]} {
+        if {[dict exists $methodCall P]} {
+            # a progress message
+            set prgInfo [dict get $methodCall P]
+            set invocId [dict get $prgInfo I]
+            if {[dict exists $Invocations $invocId]} {
+                set hub [dict get $Invocations $invocId]
+                $hub progress $invocId [dict get $prgInfo D]
+            }
+        } elseif {[dict exists $methodCall H]} {
             # a hub method
             set hub [string tol [dict get $methodCall H]]
             if {[dict exists $Hubs $hub]} {
