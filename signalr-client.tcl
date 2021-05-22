@@ -106,7 +106,11 @@ proc ::signalr::init-tls {} {
     
     method stop {} {
         if {$Socket != {}} {
-            ::websocket::close $Socket
+            try {
+                ::websocket::close $Socket
+            } trap {WEBSOCKET} {msg} {
+                # we don't care much
+            }
             set Socket {}
             set Started no
             set Connected no
