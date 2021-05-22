@@ -46,6 +46,9 @@ proc ::signalr::init-tls {} {
     # effect is that the server calls methods on this hub, they must be
     # implemented correspondingly as methods in the subclass of this class.
     method invoke {method argsData} {
+        if {![$connection getStarted]} {
+            throw SIGNALR "Cannot invoke $method from hub [self], SignalR Connection not fully established!"
+        }
         set invocationId [$connection invocationId [self]]
         set message [json template {
             {
@@ -206,6 +209,7 @@ proc ::signalr::init-tls {} {
             set Handshake [::signalr::Handshake new $Url [lindex $Hubs 0]]
         }
         set Socket [::websocket::open [$Handshake connectUrl] [list [self] handleSocket]]
+        my WaitForBeingStarted 5000 true
     }
 
     ## Disconnects the client from the server.
@@ -285,6 +289,28 @@ proc ::signalr::init-tls {} {
         set Connected $isConnected
     }
 
+    ## Wait for the start message to arrive
+    #
+    # Returns the started state, if successful. If throw is true, an error is thrown when
+    # the timeout is reached.
+    method WaitForBeingStarted {timeout throw} {
+        # wait until we are actually started, but no longer than 5s
+        after 5000 [list apply {{varName} {
+            if {![set $varName]} {
+                set $varName timeout
+            }
+        }} [self namespace]::Started]
+        vwait [self namespace]::Started
+        if {$Started eq "timeout"} {
+            my stop
+            if {$throw} {
+                throw SIGNALR "Did not receive initialize message from server in time ($timeout ms)"
+            }
+            return timeout
+        }
+        set Started
+    }
+    
     ## Called when the initialize message is received.
     #
     # The client accepts connections not until the initialize message was received.
