@@ -173,7 +173,7 @@ proc ::signalr::init-tls {} {
         set Started $isStarted
     }
 
-    method ProcessMessage {message {result {}}} {
+    method ProcessMessage {message} {
         set msg [json get $message]
 
         if {[dict exists $msg I]} {
@@ -183,7 +183,6 @@ proc ::signalr::init-tls {} {
         }
 
         set crtlResult [my ProcessControlFields $msg]
-
         if {[dict exist $msg M]} {
             # a list of method calls. Save the message ID too for evtl reconnect.
             if {[dict exists $msg C]} {
@@ -233,7 +232,7 @@ proc ::signalr::init-tls {} {
             # a hub method
             set hub [string tol [dict get $methodCall H]]
             if {[dict exists $Hubs $hub]} {
-                my hub $hub [dict get $methodCall M] [dict get $methodCall A]
+                my hub $hub [dict get $methodCall M] {*}[dict get $methodCall A]
             }
         }
     }
