@@ -33,9 +33,9 @@ proc ::signalr::init-tls {} {
                 "H": "~S:hub",
                 "M": "~S:method",
                 "A": "~T:args",
-                "I": "~N:incr"
+                "I": "~N:invocation"
             }
-        } [list hub $name method $method args $argsData incr [$connection incr]]]
+        } [list hub $name method $method args $argsData invocation [$connection invocationId]]]
         $connection send $message
     }
     
@@ -51,7 +51,7 @@ proc ::signalr::init-tls {} {
     property Socket {}
     property Connected no -get
     property Started no -get
-    property Increment 0
+    property InvocationId 0
     
     construct {args} {
         set Url [dict get $args -url]
@@ -90,8 +90,8 @@ proc ::signalr::init-tls {} {
         }
     }
     
-    method incr {} {
-        incr Increment
+    method invocationId {} {
+        incr InvocationId
     }
 
     method start {} {
@@ -126,12 +126,7 @@ proc ::signalr::init-tls {} {
                 if {$message == {} || $message == {{}}} {
                     return
                 }
-                if {[regexp {({.+})({.+})} $message m part1 part2]} {
-                    # a control message with a result
-                    my ProcessMessage $part1 $part2
-                } else {
-                    my ProcessMessage $message
-                }
+                my ParseAndProcessMessage $message
             }
             cl* -
             disc* {
@@ -139,6 +134,35 @@ proc ::signalr::init-tls {} {
                 my SetConnected no
             }
         }
+    }
+
+    ## Parse and process messages received from the server.
+    # Messages are usually json, but sometimes there is more than one json
+    # string in one message. Then they are not separated by some char, e.g.
+    # they look like
+    #
+    # {"C":"...","G":"..."}{"R":"...","I:"."}
+    #
+    # Job of this method is to split such messages up into several json
+    # objects that can be processed.
+    method ParseAndProcessMessage {message} {
+        set idx [string first "\{" $message 1]
+        set jdx 0
+        while {$idx >= 0} {
+            set prevIdx [expr {$idx - 1}]
+            if {[string index $message $prevIdx] ne "\}"} {
+                # some object opening char within a message
+                set idx [string first "\{" $message [incr idx]]
+                continue
+            }
+
+            my ProcessMessage [string range $message $jdx $prevIdx]
+
+            set jdx $idx
+            set idx [string first "\{" $message [incr idx]]
+        }
+
+        my ProcessMessage [string range $message $jdx end]
     }
 
     method SetConnected {isConnected} {
@@ -151,22 +175,57 @@ proc ::signalr::init-tls {} {
 
     method ProcessMessage {message {result {}}} {
         set msg [json get $message]
-        if {[dict exists $msg C]} {
-            $Handshake setMessageId [dict get $msg C]
-        }
-        if {[dict exist $msg S] && [dict get $msg S]} {
-            # start message received
-            my SetStarted yes
+
+        if {[dict exists $msg I]} {
+            # invocation received from server
+            # TODO
             return
+        }
+
+        set crtlResult [my ProcessControlFields $msg]
+
+        if {[dict exist $msg M]} {
+            # a list of method calls. Save the message ID too for evtl reconnect.
+            if {[dict exists $msg C]} {
+                $Handshake setMessageId [dict get $msg C]
+            }
+            foreach {method} [dict get $msg M] {
+                my ProcessHubMethod $method
+            }
+        }
+
+        # process the control result
+        if {[dict get $crtlResult disconnect]} {
+            my stop
+        }
+        if {[dict get $crtlResult reconnect]} {
+            my stop
+            my start
+        }
+    }
+
+    method ProcessControlFields {msg} {
+        set result {disconnect no reconnect no}
+        if {[dict exists $msg D] && [dict get $msg D]} {
+            # disconnect event received from server
+            return [list disconnect yes]
+        }
+        if {[dict exists $msg T] && [dict get $msg T]} {
+            dict set result reconnect yes
         }
         if {[dict exists $msg G]} {
             $Handshake setGroupsToken [dict get $msg G]
         }
 
-        if {[dict exist $msg M]} {
-            # a method call to us
-            my ProcessHubMethod [lindex [dict get $msg M]  0]
+        if {[dict exist $msg S] && [dict get $msg S]} {
+            # start message received
+            my SetStarted yes
         }
+        if {[dict exists $msg G]} {
+            $Handshake setGroupsToken [dict get $msg G]
+        }
+
+        return $result
     }
 
     method ProcessHubMethod {methodCall} {
@@ -276,7 +335,6 @@ proc ::signalr::init-tls {} {
         }
     }
 }
-
 
 ::signalr::init-tls
 
