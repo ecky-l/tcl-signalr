@@ -3,7 +3,7 @@
 package require http 2.9.0
 package require tls 1.7
 package require websocket 1.4
-package require tclooh 2.0.0
+package require tclooh 1.0.0
 package require rl_json 0.9.9
 
 namespace import ::rl_json::json
