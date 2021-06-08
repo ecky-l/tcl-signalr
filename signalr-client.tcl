@@ -32,14 +32,14 @@ proc ::signalr::init-tls {} {
 # letters. If a hub method is received with first letter in upper case, the connection turns
 # that first letter into lower case before calling the method.
 ::ooh::class create ::signalr::hub {
-    
+
     property connection {}
     property name ""
-    
+
     construct {args} {
         my configure {*}$args
     }
-    
+
     ## invokes a method on the server with this hub as target.
     #
     # Results, errors and progress is received for this hub. If the side
@@ -209,6 +209,7 @@ proc ::signalr::init-tls {} {
             set Handshake [::signalr::Handshake new $Url [lindex $Hubs 0]]
         }
         set Socket [::websocket::open [$Handshake connectUrl] [list [self] handleSocket]]
+        fconfigure $Socket -translation auto
         my WaitForBeingStarted 5000 true
     }
 
@@ -245,7 +246,7 @@ proc ::signalr::init-tls {} {
                 if {$message == {} || $message == {{}}} {
                     return
                 }
-                my ParseAndProcessMessage $message
+                my ProcessMessage $message
             }
             cl* -
             disc* {
@@ -253,35 +254,6 @@ proc ::signalr::init-tls {} {
                 my SetConnected no
             }
         }
-    }
-
-    ## Parse and process messages received from the server.
-    # Messages are usually json, but sometimes there is more than one json
-    # string in one message. Then they are not separated by some char, e.g.
-    # they look like
-    #
-    # {"C":"...","G":"..."}{"R":"...","I:"."}
-    #
-    # Job of this method is to split such messages up into several json
-    # objects that can be processed.
-    method ParseAndProcessMessage {message} {
-        set idx [string first "\{" $message 1]
-        set jdx 0
-        while {$idx >= 0} {
-            set prevIdx [expr {$idx - 1}]
-            if {[string index $message $prevIdx] ne "\}"} {
-                # some object opening char within a message
-                set idx [string first "\{" $message [incr idx]]
-                continue
-            }
-
-            my ProcessMessage [string range $message $jdx $prevIdx]
-
-            set jdx $idx
-            set idx [string first "\{" $message [incr idx]]
-        }
-
-        my ProcessMessage [string range $message $jdx end]
     }
 
     ## Called when a connection is established.
@@ -310,7 +282,7 @@ proc ::signalr::init-tls {} {
         }
         set Started
     }
-    
+
     ## Called when the initialize message is received.
     #
     # The client accepts connections not until the initialize message was received.
@@ -320,7 +292,7 @@ proc ::signalr::init-tls {} {
 
     ## General message parsing and processing.
     #
-    # Called from [ParseAndProcessMessage] with normalized json string messages.
+    # Called from handleSocket with normalized json string messages.
     method ProcessMessage {message} {
         set msg [json get $message]
 
